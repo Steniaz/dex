@@ -10,16 +10,27 @@ import (
 	// https://github.com/grpc/grpc-go/issues/711
 	"golang.org/x/net/context"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/coreos/dex/api"
 	"github.com/coreos/dex/server/internal"
 	"github.com/coreos/dex/storage"
 	"github.com/coreos/dex/version"
+	"github.com/sirupsen/logrus"
 )
 
 // apiVersion increases every time a new call is added to the API. Clients should use this info
 // to determine if the server supports specific features.
 const apiVersion = 2
+
+const (
+	// recCost is the recommended bcrypt cost, which balances hash strength and
+	// efficiency.
+	recCost = 12
+
+	// upBoundCost is a sane upper bound on bcrypt cost determined by benchmarking:
+	// high enough to ensure secure encryption, low enough to not put unnecessary
+	// load on a dex server.
+	upBoundCost = 16
+)
 
 // NewAPI returns a server which implements the gRPC API interface.
 func NewAPI(s storage.Storage, logger logrus.FieldLogger) api.DexServer {
@@ -80,14 +91,18 @@ func (d dexAPI) DeleteClient(ctx context.Context, req *api.DeleteClientReq) (*ap
 	return &api.DeleteClientResp{}, nil
 }
 
-// checkCost returns an error if the hash provided does not meet minimum cost requirement
+// checkCost returns an error if the hash provided does not meet lower or upper
+// bound cost requirements.
 func checkCost(hash []byte) error {
 	actual, err := bcrypt.Cost(hash)
 	if err != nil {
 		return fmt.Errorf("parsing bcrypt hash: %v", err)
 	}
 	if actual < bcrypt.DefaultCost {
-		return fmt.Errorf("given hash cost = %d, does not meet minimum cost requirement = %d", actual, bcrypt.DefaultCost)
+		return fmt.Errorf("given hash cost = %d does not meet minimum cost requirement = %d", actual, bcrypt.DefaultCost)
+	}
+	if actual > upBoundCost {
+		return fmt.Errorf("given hash cost = %d is above upper bound cost = %d, recommended cost = %d", actual, upBoundCost, recCost)
 	}
 	return nil
 }
@@ -251,11 +266,19 @@ func (d dexAPI) RevokeRefresh(ctx context.Context, req *api.RevokeRefreshReq) (*
 		return nil, err
 	}
 
-	var refreshID string
+	var (
+		refreshID string
+		notFound  bool
+	)
 	updater := func(old storage.OfflineSessions) (storage.OfflineSessions, error) {
-		if refreshID = old.Refresh[req.ClientId].ID; refreshID == "" {
-			return old, fmt.Errorf("user does not have a refresh token for the client = %s", req.ClientId)
+		refreshRef := old.Refresh[req.ClientId]
+		if refreshRef == nil || refreshRef.ID == "" {
+			d.logger.Errorf("api: refresh token issued to client %q for user %q not found for deletion", req.ClientId, id.UserId)
+			notFound = true
+			return old, storage.ErrNotFound
 		}
+
+		refreshID = refreshRef.ID
 
 		// Remove entry from Refresh list of the OfflineSession object.
 		delete(old.Refresh, req.ClientId)
@@ -271,7 +294,14 @@ func (d dexAPI) RevokeRefresh(ctx context.Context, req *api.RevokeRefreshReq) (*
 		return nil, err
 	}
 
+	if notFound {
+		return &api.RevokeRefreshResp{NotFound: true}, nil
+	}
+
 	// Delete the refresh token from the storage
+	//
+	// TODO(ericchiang): we don't have any good recourse if this call fails.
+	// Consider garbage collection of refresh tokens with no associated ref.
 	if err := d.s.DeleteRefresh(refreshID); err != nil {
 		d.logger.Errorf("failed to delete refresh token: %v", err)
 		return nil, err

@@ -1,6 +1,6 @@
 # dex - A federated OpenID Connect provider
 
-[![Travis](https://api.travis-ci.org/coreos/dex.svg)](https://travis-ci.org/coreos/dex)
+[![Travis](https://travis-ci.org/liquidlabs-co/dex.svg)](https://travis-ci.org/liquidlabs-co/dex)
 [![GoDoc](https://godoc.org/github.com/coreos/dex?status.svg)](https://godoc.org/github.com/coreos/dex)
 [![Go Report Card](https://goreportcard.com/badge/github.com/coreos/dex)](https://goreportcard.com/report/github.com/coreos/dex)
 
@@ -9,6 +9,24 @@
 Dex is an identity service that uses [OpenID Connect][openid-connect] to drive authentication for other apps.
 
 Dex is NOT a user-management system, but acts as a portal to other identity providers through "connectors." This lets dex defer authentication to LDAP servers, SAML providers, or established identity providers like GitHub, Google, and Active Directory. Clients write their authentication logic once to talk to dex, then dex handles the protocols for a given backend.
+
+## Quick Start
+
+To build Docker images for `dex` and push tagged images to ECR, use the provided helper script.
+
+```
+./scripts/build-and-push.sh
+```
+
+__Note__: the location of the ECR repository is determined using the `AWS_ACCOUNT_ID` environment variable. Ensure the correct value is exported to your environment before using this script.
+
+### Gigster Cluster Accounts
+
+Cluster                   | Account ID
+--------------------------|-----------
+hosting.gigster.com       | `569325332953`
+gdeqa.gigsternetwork.com  | `832873517058`
+gdedev.gigsternetwork.com | `025889284855`
 
 ## ID Tokens
 
@@ -67,6 +85,9 @@ More docs for running dex as a Kubernetes authenticator can be found [here](Docu
   * [GitLab](Documentation/gitlab-connector.md)
   * [SAML 2.0](Documentation/saml-connector.md)
   * [OpenID Connect](Documentation/oidc-connector.md) (includes Google, Salesforce, Azure, etc.)
+  * [authproxy](Documentation/authproxy.md) (Apache2 mod_auth, etc.)
+  * [LinkedIn](Documentation/linkedin-connector.md)
+  * [Microsoft](Documentation/microsoft-connection.md)
 * Client libraries
   * [Go][go-oidc]
 
@@ -78,7 +99,6 @@ Due to their public nature, GitHub and mailing lists are NOT appropriate places 
 
 * For feature requests and bugs, file an [issue][issues].
 * For general discussion about both using and developing dex, join the [dex-dev][dex-dev] mailing list.
-* For more details on dex development plans, check out the GitHub [milestones][milestones].
 
 [openid-connect]: https://openid.net/connect/
 [standard-claims]: https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims

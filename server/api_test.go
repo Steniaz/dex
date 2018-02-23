@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/coreos/dex/api"
 	"github.com/coreos/dex/server/internal"
 	"github.com/coreos/dex/storage"
 	"github.com/coreos/dex/storage/memory"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
 
@@ -119,6 +119,63 @@ func TestPassword(t *testing.T) {
 
 }
 
+// Ensures checkCost returns expected values
+func TestCheckCost(t *testing.T) {
+	logger := &logrus.Logger{
+		Out:       os.Stderr,
+		Formatter: &logrus.TextFormatter{DisableColors: true},
+		Level:     logrus.DebugLevel,
+	}
+
+	s := memory.New(logger)
+	client := newAPI(s, logger, t)
+	defer client.Close()
+
+	tests := []struct {
+		name      string
+		inputHash []byte
+
+		wantErr bool
+	}{
+		{
+			name: "valid cost",
+			// bcrypt hash of the value "test1" with cost 12 (default)
+			inputHash: []byte("$2a$12$M2Ot95Qty1MuQdubh1acWOiYadJDzeVg3ve4n5b.dgcgPdjCseKx2"),
+		},
+		{
+			name:      "invalid hash",
+			inputHash: []byte(""),
+			wantErr:   true,
+		},
+		{
+			name: "cost below default",
+			// bcrypt hash of the value "test1" with cost 4
+			inputHash: []byte("$2a$04$8bSTbuVCLpKzaqB3BmgI7edDigG5tIQKkjYUu/mEO9gQgIkw9m7eG"),
+			wantErr:   true,
+		},
+		{
+			name: "cost above recommendation",
+			// bcrypt hash of the value "test1" with cost 17
+			inputHash: []byte("$2a$17$tWuZkTxtSmRyWZAGWVHQE.7npdl.TgP8adjzLJD.SyjpFznKBftPe"),
+			wantErr:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		if err := checkCost(tc.inputHash); err != nil {
+			if !tc.wantErr {
+				t.Errorf("%s: %s", tc.name, err)
+			}
+			continue
+		}
+
+		if tc.wantErr {
+			t.Errorf("%s: expected err", tc.name)
+			continue
+		}
+	}
+}
+
 // Attempts to list and revoke an exisiting refresh token.
 func TestRefreshToken(t *testing.T) {
 	logger := &logrus.Logger{
@@ -210,8 +267,22 @@ func TestRefreshToken(t *testing.T) {
 	}
 
 	resp, err := client.RevokeRefresh(ctx, &revokeReq)
-	if err != nil || resp.NotFound {
+	if err != nil {
 		t.Fatalf("Unable to revoke refresh tokens for user: %v", err)
+	}
+	if resp.NotFound {
+		t.Errorf("refresh token session wasn't found")
+	}
+
+	// Try to delete again.
+	//
+	// See https://github.com/coreos/dex/issues/1055
+	resp, err = client.RevokeRefresh(ctx, &revokeReq)
+	if err != nil {
+		t.Fatalf("Unable to revoke refresh tokens for user: %v", err)
+	}
+	if !resp.NotFound {
+		t.Errorf("refresh token session was found")
 	}
 
 	if resp, _ := client.ListRefresh(ctx, &listReq); len(resp.RefreshTokens) != 0 {

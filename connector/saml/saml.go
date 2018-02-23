@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/beevik/etree"
 	dsig "github.com/russellhaering/goxmldsig"
 	"github.com/russellhaering/goxmldsig/etreeutils"
+	"github.com/sirupsen/logrus"
 
 	"github.com/coreos/dex/connector"
 )
@@ -125,7 +125,7 @@ func (c certStore) Certificates() (roots []*x509.Certificate, err error) {
 
 // Open validates the config and returns a connector. It does not actually
 // validate connectivity with the provider.
-func (c *Config) Open(logger logrus.FieldLogger) (connector.Connector, error) {
+func (c *Config) Open(id string, logger logrus.FieldLogger) (connector.Connector, error) {
 	return c.openConnector(logger)
 }
 
@@ -365,6 +365,11 @@ func (p *provider) HandlePOST(s connector.Scopes, samlResponse, inResponseTo str
 	if attributes == nil {
 		return ident, fmt.Errorf("response did not contain a AttributeStatement")
 	}
+
+	// Log the actual attributes we got back from the server. This helps debug
+	// configuration errors on the server side, where the SAML server doesn't
+	// send us the correct attributes.
+	p.logger.Infof("parsed and verified saml response attributes %s", attributes)
 
 	// Grab the email.
 	if ident.Email, _ = attributes.get(p.emailAttr); ident.Email == "" {

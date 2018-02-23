@@ -12,8 +12,8 @@ import (
 
 	"gopkg.in/ldap.v2"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/coreos/dex/connector"
+	"github.com/sirupsen/logrus"
 )
 
 // Config holds the configuration parameters for the LDAP connector. The LDAP
@@ -77,6 +77,11 @@ type Config struct {
 	BindDN string `json:"bindDN"`
 	BindPW string `json:"bindPW"`
 
+	// UsernamePrompt allows users to override the username attribute (displayed
+	// in the username/password prompt). If unset, the handler will use
+	// "Username".
+	UsernamePrompt string `json:"usernamePrompt"`
+
 	// User entry search configuration.
 	UserSearch struct {
 		// BsaeDN to start the search from. For example "cn=users,dc=example,dc=com"
@@ -127,6 +132,19 @@ type Config struct {
 	} `json:"groupSearch"`
 }
 
+func scopeString(i int) string {
+	switch i {
+	case ldap.ScopeBaseObject:
+		return "base"
+	case ldap.ScopeSingleLevel:
+		return "one"
+	case ldap.ScopeWholeSubtree:
+		return "sub"
+	default:
+		return ""
+	}
+}
+
 func parseScope(s string) (int, bool) {
 	// NOTE(ericchiang): ScopeBaseObject doesn't really make sense for us because we
 	// never know the user's or group's DN.
@@ -140,7 +158,7 @@ func parseScope(s string) (int, bool) {
 }
 
 // Open returns an authentication strategy using LDAP.
-func (c *Config) Open(logger logrus.FieldLogger) (connector.Connector, error) {
+func (c *Config) Open(id string, logger logrus.FieldLogger) (connector.Connector, error) {
 	conn, err := c.OpenConnector(logger)
 	if err != nil {
 		return nil, err
@@ -342,6 +360,9 @@ func (c *ldapConnector) userEntry(conn *ldap.Conn, username string) (user ldap.E
 	if c.UserSearch.NameAttr != "" {
 		req.Attributes = append(req.Attributes, c.UserSearch.NameAttr)
 	}
+
+	c.logger.Infof("performing ldap search %s %s %s",
+		req.BaseDN, scopeString(req.Scope), req.Filter)
 	resp, err := conn.Search(req)
 	if err != nil {
 		return ldap.Entry{}, false, fmt.Errorf("ldap: search with filter %q failed: %v", req.Filter, err)
@@ -352,7 +373,9 @@ func (c *ldapConnector) userEntry(conn *ldap.Conn, username string) (user ldap.E
 		c.logger.Errorf("ldap: no results returned for filter: %q", filter)
 		return ldap.Entry{}, false, nil
 	case 1:
-		return *resp.Entries[0], true, nil
+		user = *resp.Entries[0]
+		c.logger.Infof("username %q mapped to entry %s", username, user.DN)
+		return user, true, nil
 	default:
 		return ldap.Entry{}, false, fmt.Errorf("ldap: filter returned multiple (%d) results: %q", n, filter)
 	}
@@ -493,6 +516,8 @@ func (c *ldapConnector) groups(ctx context.Context, user ldap.Entry) ([]string, 
 
 		gotGroups := false
 		if err := c.do(ctx, func(conn *ldap.Conn) error {
+			c.logger.Infof("performing ldap search %s %s %s",
+				req.BaseDN, scopeString(req.Scope), req.Filter)
 			resp, err := conn.Search(req)
 			if err != nil {
 				return fmt.Errorf("ldap: search failed: %v", err)
@@ -524,4 +549,8 @@ func (c *ldapConnector) groups(ctx context.Context, user ldap.Entry) ([]string, 
 		groupNames = append(groupNames, name)
 	}
 	return groupNames, nil
+}
+
+func (c *ldapConnector) Prompt() string {
+	return c.UsernamePrompt
 }

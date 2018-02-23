@@ -23,12 +23,13 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const exampleAppState = "I wish to wash my irish wristwatch"
+const exampleAppState = "Start"
 
 type app struct {
 	clientID     string
 	clientSecret string
 	redirectURI  string
+	clusterName  string
 
 	verifier *oidc.IDTokenVerifier
 	provider *oidc.Provider
@@ -176,6 +177,7 @@ func cmd() *cobra.Command {
 			a.provider = provider
 			a.verifier = provider.Verifier(&oidc.Config{ClientID: a.clientID})
 
+			http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 			http.HandleFunc("/", a.handleIndex)
 			http.HandleFunc("/login", a.handleLogin)
 			http.HandleFunc(u.Path, a.handleCallback)
@@ -200,6 +202,7 @@ func cmd() *cobra.Command {
 	c.Flags().StringVar(&tlsCert, "tls-cert", "", "X509 cert file to present when serving HTTPS.")
 	c.Flags().StringVar(&tlsKey, "tls-key", "", "Private key for the HTTPS cert.")
 	c.Flags().StringVar(&rootCAs, "issuer-root-ca", "", "Root certificate authorities for the issuer. Defaults to host certs.")
+	c.Flags().StringVar(&a.clusterName, "cluster-name", "hosting.gigster.com", "Name of this k8s cluster.")
 	c.Flags().BoolVar(&debug, "debug", false, "Print all request and responses from the OpenID Connect issuer.")
 	return &c
 }
@@ -316,5 +319,5 @@ func (a *app) handleCallback(w http.ResponseWriter, r *http.Request) {
 	buff := new(bytes.Buffer)
 	json.Indent(buff, []byte(claims), "", "  ")
 
-	renderToken(w, a.redirectURI, rawIDToken, token.RefreshToken, buff.Bytes())
+	renderToken(w, a.redirectURI, rawIDToken, token.RefreshToken, buff.Bytes(), a.clusterName)
 }

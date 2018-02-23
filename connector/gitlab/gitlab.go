@@ -11,14 +11,20 @@ import (
 	"regexp"
 	"strconv"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/coreos/dex/connector"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"
 )
 
 const (
-	scopeEmail = "user:email"
-	scopeOrgs  = "read:org"
+	// https://docs.gitlab.com/ee/integration/oauth_provider.html#authorized-applications
+	scopeUser = "read_user"
+	scopeAPI  = "api"
+)
+
+var (
+	reNext = regexp.MustCompile("<([^>]+)>; rel=\"next\"")
+	reLast = regexp.MustCompile("<([^>]+)>; rel=\"last\"")
 )
 
 // Config holds configuration options for gilab logins.
@@ -45,7 +51,7 @@ type gitlabGroup struct {
 }
 
 // Open returns a strategy for logging in through GitLab.
-func (c *Config) Open(logger logrus.FieldLogger) (connector.Connector, error) {
+func (c *Config) Open(id string, logger logrus.FieldLogger) (connector.Connector, error) {
 	if c.BaseURL == "" {
 		c.BaseURL = "https://www.gitlab.com"
 	}
@@ -78,7 +84,11 @@ type gitlabConnector struct {
 }
 
 func (c *gitlabConnector) oauth2Config(scopes connector.Scopes) *oauth2.Config {
-	gitlabScopes := []string{"api"}
+	gitlabScopes := []string{scopeUser}
+	if scopes.Groups {
+		gitlabScopes = []string{scopeAPI}
+	}
+
 	gitlabEndpoint := oauth2.Endpoint{AuthURL: c.baseURL + "/oauth/authorize", TokenURL: c.baseURL + "/oauth/token"}
 	return &oauth2.Config{
 		ClientID:     c.clientID,
@@ -198,7 +208,7 @@ func (c *gitlabConnector) Refresh(ctx context.Context, s connector.Scopes, ident
 // a bearer token as part of the request.
 func (c *gitlabConnector) user(ctx context.Context, client *http.Client) (gitlabUser, error) {
 	var u gitlabUser
-	req, err := http.NewRequest("GET", c.baseURL+"/api/v3/user", nil)
+	req, err := http.NewRequest("GET", c.baseURL+"/api/v4/user", nil)
 	if err != nil {
 		return u, fmt.Errorf("gitlab: new req: %v", err)
 	}
@@ -229,10 +239,7 @@ func (c *gitlabConnector) user(ctx context.Context, client *http.Client) (gitlab
 // which inserts a bearer token as part of the request.
 func (c *gitlabConnector) groups(ctx context.Context, client *http.Client) ([]string, error) {
 
-	apiURL := c.baseURL + "/api/v3/groups"
-
-	reNext := regexp.MustCompile("<(.*)>; rel=\"next\"")
-	reLast := regexp.MustCompile("<(.*)>; rel=\"last\"")
+	apiURL := c.baseURL + "/api/v4/groups"
 
 	groups := []string{}
 	var gitlabGroups []gitlabGroup
@@ -267,22 +274,28 @@ func (c *gitlabConnector) groups(ctx context.Context, client *http.Client) ([]st
 
 		link := resp.Header.Get("Link")
 
-		if len(reLast.FindStringSubmatch(link)) > 1 {
-			lastPageURL := reLast.FindStringSubmatch(link)[1]
-
-			if apiURL == lastPageURL {
-				break
-			}
-		} else {
+		apiURL = nextURL(apiURL, link)
+		if apiURL == "" {
 			break
 		}
-
-		if len(reNext.FindStringSubmatch(link)) > 1 {
-			apiURL = reNext.FindStringSubmatch(link)[1]
-		} else {
-			break
-		}
-
 	}
 	return groups, nil
+}
+
+func nextURL(url string, link string) string {
+	if len(reLast.FindStringSubmatch(link)) > 1 {
+		lastPageURL := reLast.FindStringSubmatch(link)[1]
+
+		if url == lastPageURL {
+			return ""
+		}
+	} else {
+		return ""
+	}
+
+	if len(reNext.FindStringSubmatch(link)) > 1 {
+		return reNext.FindStringSubmatch(link)[1]
+	}
+
+	return ""
 }

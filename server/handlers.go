@@ -223,6 +223,7 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scopes := parseScopes(authReq.Scopes)
+	showBacklink := len(s.connectors) > 1
 
 	switch r.Method {
 	case "GET":
@@ -250,7 +251,7 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 			}
 			http.Redirect(w, r, callbackURL, http.StatusFound)
 		case connector.PasswordConnector:
-			if err := s.templates.password(w, r.URL.String(), "", false); err != nil {
+			if err := s.templates.password(w, r.URL.String(), "", usernamePrompt(conn), false, showBacklink); err != nil {
 				s.logger.Errorf("Server template error: %v", err)
 			}
 		case connector.SAMLConnector:
@@ -298,7 +299,7 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !ok {
-			if err := s.templates.password(w, r.URL.String(), username, true); err != nil {
+			if err := s.templates.password(w, r.URL.String(), username, usernamePrompt(passwordConnector), true, showBacklink); err != nil {
 				s.logger.Errorf("Server template error: %v", err)
 			}
 			return
@@ -346,6 +347,12 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if connID := mux.Vars(r)["connector"]; connID != "" && connID != authReq.ConnectorID {
+		s.logger.Errorf("Connector mismatch: authentication started with id %q, but callback for id %q was triggered", authReq.ConnectorID, connID)
+		s.renderError(w, http.StatusInternalServerError, "Requested resource does not exist.")
+		return
+	}
+
 	conn, err := s.getConnector(authReq.ConnectorID)
 	if err != nil {
 		s.logger.Errorf("Failed to get connector with id %q : %v", authReq.ConnectorID, err)
@@ -390,6 +397,8 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
+// finalizeLogin associates the user's identity with the current AuthRequest, then returns
+// the approval page's path.
 func (s *Server) finalizeLogin(identity connector.Identity, authReq storage.AuthRequest, conn connector.Connector) (string, error) {
 	claims := storage.Claims{
 		UserID:        identity.UserID,
@@ -408,6 +417,15 @@ func (s *Server) finalizeLogin(identity connector.Identity, authReq storage.Auth
 	if err := s.storage.UpdateAuthRequest(authReq.ID, updater); err != nil {
 		return "", fmt.Errorf("failed to update auth request: %v", err)
 	}
+
+	email := claims.Email
+	if !claims.EmailVerified {
+		email = email + " (unverified)"
+	}
+
+	s.logger.Infof("login successful: connector %q, username=%q, email=%q, groups=%q",
+		authReq.ConnectorID, claims.Username, email, claims.Groups)
+
 	return path.Join(s.issuerURL.Path, "/approval") + "?req=" + authReq.ID, nil
 }
 
@@ -978,7 +996,7 @@ func (s *Server) writeAccessToken(w http.ResponseWriter, idToken, accessToken, r
 }
 
 func (s *Server) renderError(w http.ResponseWriter, status int, description string) {
-	if err := s.templates.err(w, http.StatusText(status), description); err != nil {
+	if err := s.templates.err(w, status, description); err != nil {
 		s.logger.Errorf("Server template error: %v", err)
 	}
 }
@@ -987,4 +1005,12 @@ func (s *Server) tokenErrHelper(w http.ResponseWriter, typ string, description s
 	if err := tokenErr(w, typ, description, statusCode); err != nil {
 		s.logger.Errorf("token error response: %v", err)
 	}
+}
+
+// Check for username prompt override from connector. Defaults to "Username".
+func usernamePrompt(conn connector.PasswordConnector) string {
+	if attr := conn.Prompt(); attr != "" {
+		return attr
+	}
+	return "Username"
 }

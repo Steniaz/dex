@@ -7,19 +7,19 @@ import (
 )
 
 var indexTmpl = template.Must(template.New("index.html").Parse(`<html>
+  <head>
+  <link rel="stylesheet" href="/static/unite.css">
+  <link rel="stylesheet" href="/static/stylesheet.css">
+  </head>
   <body>
-    <form action="/login" method="post">
-       <p>
-         Authenticate for:<input type="text" name="cross_client" placeholder="list of client-ids">
-       </p>
-       <p>
-         Extra scopes:<input type="text" name="extra_scopes" placeholder="list of scopes">
-       </p>
-	   <p>
-	     Request offline access:<input type="checkbox" name="offline_access" value="yes" checked>
-       </p>
-       <input type="submit" value="Login">
+    <div class="center">
+    <form action="/login" method="post" id="login">
+        <input type="hidden" name="cross_client" placeholder="list of client-ids">
+        <input type="hidden" name="extra_scopes" placeholder="list of scopes">
+        <input type="hidden" name="offline_access" value="yes" checked>
+    <button type="submit" form="login" class="bttn-unite bttn-lg bttn-primary"> Log into Kubernetes </button>
     </form>
+    </div>
   </body>
 </html>`))
 
@@ -32,41 +32,42 @@ type tokenTmplData struct {
 	RefreshToken string
 	RedirectURL  string
 	Claims       string
+	ClusterName  string
 }
 
 var tokenTmpl = template.Must(template.New("token.html").Parse(`<html>
   <head>
-    <style>
-/* make pre wrap */
-pre {
- white-space: pre-wrap;       /* css-3 */
- white-space: -moz-pre-wrap;  /* Mozilla, since 1999 */
- white-space: -pre-wrap;      /* Opera 4-6 */
- white-space: -o-pre-wrap;    /* Opera 7 */
- word-wrap: break-word;       /* Internet Explorer 5.5+ */
-}
-    </style>
+  <link rel="stylesheet" href="/static/stylesheet.css">
   </head>
   <body>
-    <p> Token: <pre><code>{{ .IDToken }}</code></pre></p>
-    <p> Claims: <pre><code>{{ .Claims }}</code></pre></p>
-	{{ if .RefreshToken }}
-    <p> Refresh Token: <pre><code>{{ .RefreshToken }}</code></pre></p>
-	<form action="{{ .RedirectURL }}" method="post">
-	  <input type="hidden" name="refresh_token" value="{{ .RefreshToken }}">
-	  <input type="submit" value="Redeem refresh token">
-    </form>
-	{{ end }}
+    <div>
+      <p> First time setting up?  Use these Commands!
+      <pre><code>export K8S_TOKEN={{ .IDToken }}
+export K8S_CLUSTER_NAME={{ .ClusterName }}
+export K8S_CA_FILE=~/${K8S_CLUSTER_NAME}.cert
+curl -o ${K8S_CA_FILE} --noproxy '*' -k 'https://s3.amazonaws.com/gigster-network-cluster-keys/${K8S_CLUSTER_NAME}/cluster.ca.cert'
+kubectl config set-credentials ${K8S_CLUSTER_NAME}-github --token=${K8S_TOKEN}
+kubectl config set-cluster ${K8S_CLUSTER_NAME} --certificate-authority=${K8S_CA_FILE} --server=https://api.${K8S_CLUSTER_NAME} --embed-certs=true
+kubectl config set-context ${K8S_CLUSTER_NAME} --user=${K8S_CLUSTER_NAME}-github --cluster=${K8S_CLUSTER_NAME}
+kubectl config use-context ${K8S_CLUSTER_NAME}</code></pre>
+
+      <p> Refreshing your login? Use these Commands!
+      <pre><code>export K8S_TOKEN={{ .IDToken }}
+export K8S_CLUSTER_NAME={{ .ClusterName }}
+kubectl config set-credentials ${K8S_CLUSTER_NAME} --token=${K8S_TOKEN}
+kubectl config use-context ${K8S_CLUSTER_NAME}</code></pre>
+    </div>
   </body>
 </html>
 `))
 
-func renderToken(w http.ResponseWriter, redirectURL, idToken, refreshToken string, claims []byte) {
+func renderToken(w http.ResponseWriter, redirectURL, idToken, refreshToken string, claims []byte, clusterName string) {
 	renderTemplate(w, tokenTmpl, tokenTmplData{
 		IDToken:      idToken,
 		RefreshToken: refreshToken,
 		RedirectURL:  redirectURL,
 		Claims:       string(claims),
+		ClusterName:  clusterName,
 	})
 }
 
